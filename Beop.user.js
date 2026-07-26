@@ -1,55 +1,14 @@
- ==UserScript==
- @name         법 (Beop)
- @namespace    objection.lol
- @description  An unpolished unfinished shitty garbage poop QOL extension for objection.lol
- @icon         httpsobjection.lolfavicon.ico
- @version      v0.830
- @author       PaddyDanielle
- @license      CC0
- @match        httpsobjection.lolcourtroom
- @match        httpsobjection.lolcourtroom
- @run-at       document-start
- @grant        GM_xmlhttpRequest
- @grant        GM.xmlHttpRequest
- @grant        GM_setValue
- @grant        GM_getValue
- @connect      catbox.moe
- @connect      api.filegarden.com
- @connect      file.garden
- @connect      api.fxtwitter.com
- @connect      reddit.com
- @connect      www.reddit.com
- @connect      youtube.com
- @connect      video.twimg.com
- @connect      
- @connect      safe.cyctorn.tech
- @connect      tenor.com
- @connect      www.tiktok.com
- @connect      vm.tiktok.com
- @connect      api.tenor.com
- @connect      api.giphy.com
- @connect      media0.giphy.com
- @connect      media1.giphy.com
- @connect      media2.giphy.com
- @connect      media3.giphy.com
- @connect      media4.giphy.com
- @connect      klipy.com
- @connect      api.klipy.com
- @connect      static.klipy.com
- @connect      a.4cdn.org
- @connect      cdn.discordapp.com
- @connect      media.discordapp.com
- @connect      i.4cdn.org
- @connect      boards.4chan.org
- @connect      boards.4channel.org
- @connect      open.spotify.com
- @connect      github.com
- @connect      api.github.com
- @connect      store.steampowered.com
- @connect      arch-img.b4k.dev
- @downloadURL httpsupdate.greasyfork.orgscripts578034%EB%B2%95%20%28Beop%29.user.js
- @updateURL httpsupdate.greasyfork.orgscripts578034%EB%B2%95%20%28Beop%29.meta.js
- ==UserScript==
+// ==UserScript==
+// @name         법 (Beop)
+// @namespace    objection.lol
+// @description  An unpolished unfinished shitty garbage poop QOL extension for objection.lol
+// @icon         https://objection.lol/favicon.ico
+// @version      v0.830
+// @author       PaddyDanielle
+// @license      CC0
+// @match        https://objection.lol/courtroom
+// @run-at       document-start
+// ==/UserScript==
 
 (function () {
     use strict;
