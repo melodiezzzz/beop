@@ -3,7 +3,7 @@
 // @namespace    objection.lol
 // @description  An unpolished unfinished shitty garbage poop QOL extension for objection.lol
 // @icon         https://objection.lol/favicon.ico
-// @version      v0.830
+// @version      v0.831
 // @author       Paddy/Danielle
 // @license      CC0
 // @match        https://objection.lol/courtroom
