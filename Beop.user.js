@@ -3452,11 +3452,10 @@ ${(() => {
                         if (hoverResolved) return;
                         const items = r.response?.data?.data;
                         if (!Array.isArray(items) || !items.length) return;
-                        const slug = slugM[1].toLowerCase();
-                        const match = items.find(g => {
-                            const s = (g.slug || '').toString().toLowerCase();
-                            return s === slug || s === slug.replace(/-\d+$/, '');
-                        }) || items[0];
+                        // Only accept an exact slug match; otherwise let the
+                        // HTML scrape fallback resolve the correct media.
+                        const match = klipyFindBySlug(items, slugM[1]);
+                        if (!match) return;
                         const mp4  = klipyFileUrl(match, ['mp4'], ['hd', 'md', 'sm']);
                         const anim = klipyFileUrl(match, ['gif', 'webp'], ['hd', 'md', 'sm']);
                         if (mp4 || anim) {
@@ -4596,12 +4595,10 @@ ${(() => {
                     if (resolved) return;
                     const items = r.response?.data?.data;
                     if (!Array.isArray(items) || !items.length) return;
-                    // Prefer exact slug match, else best search hit
-                    const match = items.find(g => {
-                        const s = (g.slug || '').toString().toLowerCase();
-                        return s === klipySlug.toLowerCase()
-                            || s === klipySlug.replace(/-\d+$/, '').toLowerCase();
-                    }) || items[0];
+                    // Only accept an exact slug match; a wrong search hit is
+                    // worse than falling through to the HTML page scrape.
+                    const match = klipyFindBySlug(items, klipySlug);
+                    if (!match) return;
                     const mp4  = klipyFileUrl(match, ['mp4'], ['hd', 'md', 'sm']);
                     const anim = klipyFileUrl(match, ['gif', 'webp'], ['hd', 'md', 'sm']);
                     if (mp4 || anim) {
@@ -5586,6 +5583,18 @@ ${(() => {
 
     function getKlipyKey() {
         return (settings.klipyApiKey || '').trim();
+    }
+
+    // Find the API item matching a klipy.com page slug.
+    // API slugs carry a random suffix ("saber-fate-carnival-phantasm--kH4q5JEZa"),
+    // so compare the base part (before "--") against the page slug.
+    function klipyFindBySlug(items, pageSlug) {
+        const slug = pageSlug.toLowerCase();
+        const slugNoIdx = slug.replace(/-\d+$/, '');
+        const baseOf = g => (g.slug || '').toString().toLowerCase().split('--')[0];
+        return items.find(g => baseOf(g) === slug)
+            || (slugNoIdx !== slug ? items.find(g => baseOf(g) === slugNoIdx) : null)
+            || null;
     }
 
     // Pull a media URL out of a Klipy API item: item.file.{size}.{format}.url
