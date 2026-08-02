@@ -2995,37 +2995,53 @@ ${(() => {
         document.body.appendChild(statusBarEl);
     }
 
-    let cachedUserCount = '';
+    let cachedUserCounts = { users: '', spectators: '' };
     let lastUserCountScan = 0;
 
     function updateStatusBar() {
         if (!statusBarEl) return;
         const m = document.getElementById('ep-stat-msgs');
         if (m) m.textContent = msgCount;
+        const counts = getNativeUserCountCached();
         const u = document.getElementById('ep-stat-users');
-        if (u) u.textContent = getNativeUserCountCached() || '?';
+        if (u) u.textContent = counts.users || '?';
+        const s = document.getElementById('ep-stat-spectators');
+        if (s) s.textContent = counts.spectators || '?';
     }
 
     function getNativeUserCountCached() {
         const now = Date.now();
-        if (now - lastUserCountScan < 3000) return cachedUserCount;
+        if (now - lastUserCountScan < 3000) return cachedUserCounts;
         lastUserCountScan = now;
-        cachedUserCount = getNativeUserCountFast();
-        return cachedUserCount;
+        cachedUserCounts = getNativeUserCountFast();
+        return cachedUserCounts;
     }
 
     function getNativeUserCountFast() {
-        const labels = [...document.querySelectorAll('[aria-label], [title]')].slice(0, 150);
+        const labels = [...document.querySelectorAll('[aria-label], [title]')].slice(0, 200);
+        let users = '';
+        let spectators = '';
         for (const el of labels) {
             if (el.closest('#ep-statusbar') || el.closest('#ep-panel') || el.closest('#ep-courtroom-bar') || el.closest('#ep-top-cover')) continue;
             const label = ((el.getAttribute('aria-label') || '') + ' ' + (el.title || '')).toLowerCase();
-            if (!/user|people|participant|member|online|viewer/.test(label)) continue;
             const text = (el.textContent || '').trim();
             const m = text.match(/\b(\d{1,3})\b/);
-            if (m) return m[1];
+            if (!m) continue;
+            if (!users && /\busers?\b/.test(label)) {
+                users = m[1];
+            }
+            if (!spectators && /\bspectators?\b/.test(label)) {
+                spectators = m[1];
+            }
+            if (users && spectators) break;
         }
-        const top = (document.body?.innerText || '').slice(0, 800);
-        return top.match(/(?:^|\n)\s*(\d{1,3})\s+0\s*(?:\n|$)/)?.[1] || '';
+
+        if (!users) {
+            const top = (document.body?.innerText || '').slice(0, 800);
+            users = top.match(/(?:^|\n)\s*(\d{1,3})\s+0\s*(?:\n|$)/)?.[1] || '';
+        }
+
+        return { users, spectators };
     }
     // Auto-scroll
     let autoScrollEnabled = true;
@@ -6486,6 +6502,7 @@ ${(() => {
                 <span id="ep-clock"></span>
                 <span class="ep-top-stat">msgs: <span id="ep-stat-msgs">0</span></span>
                 <span class="ep-top-stat">users: <span id="ep-stat-users">—</span></span>
+                <span class="ep-top-stat">spectators: <span id="ep-stat-spectators">—</span></span>
             </div>`;
         cover.querySelectorAll('.ep-top-btn').forEach(btn => {
             btn.addEventListener('click', () => clickNativeTopAction(btn.dataset.topAction));
