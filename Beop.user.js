@@ -3,7 +3,7 @@
 // @namespace    objection.lol
 // @description  An unpolished unfinished shitty garbage poop QOL extension for objection.lol
 // @icon         https://objection.lol/favicon.ico
-// @version      v0.832
+// @version      v0.840
 // @author       Paddy/Danielle
 // @license      CC0
 // @match        https://objection.lol/courtroom
@@ -156,6 +156,7 @@
         filegardenUserId: "",
         filegardenToken: "",
         cyctornToken: "",
+        experimentalMusicUploader: false,
         exportFormat: "txt",
         // Background
         backgroundEnabled: false,
@@ -928,6 +929,7 @@ body.ep-threading .ep-msg-btn.ep-reply-btn { display: inline-flex; }
 @keyframes ep-toast-out { from { opacity:1; transform:translateX(0) scale(1); } to { opacity:0; transform:translateX(24px) scale(0.92); } }
 .ep-toast.ep-toast-entering { animation: ep-toast-in 0.22s cubic-bezier(0.34,1.2,0.64,1) forwards; }
 .ep-toast.ep-toast-leaving  { animation: ep-toast-out 0.22s ease-in forwards; }
+@keyframes ep-music-spin { to { transform: rotate(360deg); } }
 .ep-msg-context {
     display: block; width: max-content; max-width: 100%; margin: 0 0 2px; padding: 1px 5px;
     border-radius: 5px; background: rgba(255,255,255,0.045); color: #777; font-size: 10px; line-height: 1.5;
@@ -2377,6 +2379,11 @@ ${(() => {
 <!-- ADVANCED -->
 <div class="ep-section" data-section="advanced">
     <div class="ep-group">
+        <div class="ep-group-title">Experimental</div>
+        ${row('experimentalMusicUploader', 'toggle', 'Experimental: Music Mass Uploader', 'Show the unfinished multi-file music uploader and its MASS UPLOAD button')}
+        <small style="display:block;padding:8px 12px;color:#765d45;font-size:10px;line-height:1.4;">Off by default while this feature is being repaired. Enable it only when you want to test it.</small>
+    </div>
+    <div class="ep-group">
         <div class="ep-group-title">About & Reset</div>
         <div class="ep-row">
             <div class="ep-label"><span>Version</span></div>
@@ -2388,6 +2395,21 @@ ${(() => {
         </div>
     </div>
     <div class="ep-group">
+        <div class="ep-group-title">Settings Backup</div>
+        <div class="ep-row">
+            <div class="ep-label"><span>Export Settings</span><small>Save your Beop settings as a portable .cfg file</small></div>
+            <button class="ep-btn secondary" id="ep-settings-export-btn" style="padding:5px 10px;font-size:11px;">Export .cfg</button>
+        </div>
+        <div class="ep-row">
+            <div class="ep-label"><span>Import Settings</span><small>Restore settings from a .cfg file made on another machine</small></div>
+            <div>
+                <input id="ep-settings-import-file" type="file" accept=".cfg,.json,application/json" style="display:none;">
+                <button class="ep-btn secondary" id="ep-settings-import-btn" style="padding:5px 10px;font-size:11px;">Import .cfg</button>
+            </div>
+        </div>
+        <small style="display:block;padding:8px 12px;color:#765d45;font-size:10px;line-height:1.4;">The backup includes saved API keys and upload tokens. Keep the file private.</small>
+    </div>
+    <div class="ep-group">
         <div class="ep-group-title">Keyboard Shortcuts</div>
         <div style="padding:10px 12px;font-size:12px;color:#777;line-height:1.9;">
             <div><kbd style="background:#1f1f1f;border:1px solid #333;padding:1px 6px;border-radius:4px;color:#ccc">Ctrl+Shift+E</kbd> — Open Settings</div>
@@ -2396,6 +2418,7 @@ ${(() => {
             <div><kbd style="background:#1f1f1f;border:1px solid #333;padding:1px 6px;border-radius:4px;color:#ccc">Ctrl+Shift+B</kbd> — Toggle Background</div>
             <div><kbd style="background:#1f1f1f;border:1px solid #333;padding:1px 6px;border-radius:4px;color:#ccc">Ctrl+Shift+C</kbd> — Toggle Compact Mode</div>
             <div><kbd style="background:#1f1f1f;border:1px solid #333;padding:1px 6px;border-radius:4px;color:#ccc">Ctrl+Shift+X</kbd> — Export Chat Log</div>
+            ${settings.experimentalMusicUploader ? '<div><kbd style="background:#1f1f1f;border:1px solid #333;padding:1px 6px;border-radius:4px;color:#ccc">Shift+X</kbd> — Show/hide music upload status</div>' : ''}
             <div><kbd style="background:#1f1f1f;border:1px solid #333;padding:1px 6px;border-radius:4px;color:#ccc">Ctrl+Shift+N</kbd> — Toggle Now Playing</div>
             <div><kbd style="background:#1f1f1f;border:1px solid #333;padding:1px 6px;border-radius:4px;color:#ccc">Esc</kbd> — Close panels</div>
         </div>
@@ -2606,6 +2629,15 @@ ${(() => {
             chatLog = [];
             showToast('Chat log cleared.');
         });
+        panelEl.querySelector('#ep-settings-export-btn')?.addEventListener('click', exportSettingsFile);
+        panelEl.querySelector('#ep-settings-import-btn')?.addEventListener('click', () => {
+            panelEl.querySelector('#ep-settings-import-file')?.click();
+        });
+        panelEl.querySelector('#ep-settings-import-file')?.addEventListener('change', e => {
+            const file = e.target.files?.[0];
+            if (file) importSettingsFile(file);
+            e.target.value = '';
+        });
         // TTS: populate voices + test button + per-user voice UI
         if (window.speechSynthesis) {
             populateTTSVoices();
@@ -2663,6 +2695,7 @@ ${(() => {
                 settings = Object.assign({}, DEFAULTS);
                 saveSettings();
                 rebuildPanel();
+                injectNativeMassUploadButton();
                 applyReskinCSS();
                 showToast('Settings reset.');
             }
@@ -2693,20 +2726,81 @@ ${(() => {
         });
     }
 
+    // Some browser voices stop unexpectedly when a single utterance is long.
+    // Split at sentence/word boundaries and play the pieces sequentially so
+    // the end of a long chat message is not silently dropped.
+    const TTS_PAUSE_TOKEN = '\uE000';
+
+    function _splitTTSText(text, maxChars = 220) {
+        const sections = String(text || '').split(TTS_PAUSE_TOKEN);
+        const chunks = [];
+        sections.forEach((section, sectionIndex) => {
+            let remaining = section.trim();
+            if (!remaining) return;
+            let firstChunk = true;
+            while (remaining.length > maxChars) {
+                const window = remaining.slice(0, maxChars + 1);
+                const sentenceBreak = Math.max(
+                    window.lastIndexOf(". "),
+                    window.lastIndexOf("! "),
+                    window.lastIndexOf("? "),
+                    window.lastIndexOf(", ")
+                );
+                const wordBreak = window.lastIndexOf(" ");
+                const cutAt = sentenceBreak > Math.floor(maxChars * 0.45)
+                    ? sentenceBreak + 1
+                    : (wordBreak > 0 ? wordBreak : maxChars);
+                chunks.push({
+                    text: remaining.slice(0, cutAt).trim(),
+                    pauseBefore: sectionIndex > 0 && firstChunk
+                });
+                firstChunk = false;
+                remaining = remaining.slice(cutAt).trim();
+            }
+            if (remaining) {
+                chunks.push({
+                    text: remaining,
+                    pauseBefore: sectionIndex > 0 && firstChunk
+                });
+            }
+        });
+        return chunks;
+    }
+
     function _playItem(item, onDone) {
         if (!window.speechSynthesis) { onDone(); return; }
-        const utt = new SpeechSynthesisUtterance(item.text);
-        utt.rate   = typeof item.rate  === "number" ? item.rate  : (typeof settings.ttsRate  === "number" ? settings.ttsRate  : 1.0);
-        utt.pitch  = typeof item.pitch === "number" ? item.pitch : (typeof settings.ttsPitch === "number" ? settings.ttsPitch : 1.0);
-        utt.volume = typeof settings.ttsVolume === "number" ? settings.ttsVolume : 1.0;
-        const voiceName = item.voiceName || settings.ttsVoice || "";
-        const allVoices = window.speechSynthesis.getVoices();
-        const resolved  = voiceName ? allVoices.find(v => v.name === voiceName) : null;
-        if (resolved) utt.voice = resolved;
+        const chunks = _splitTTSText(item.text);
+        if (!chunks.length) { onDone(); return; }
         ttsActiveSpeakerKey = item.speakerKey || "__global__";
-        utt.onend  = onDone;
-        utt.onerror = onDone;
-        try { window.speechSynthesis.speak(utt); } catch (_e) { onDone(); }
+        let chunkIndex = 0;
+        const startGeneration = ttsGen;
+
+        const speakNextChunk = () => {
+            if (ttsGen !== startGeneration) { onDone(); return; }
+            if (chunkIndex >= chunks.length) {
+                onDone();
+                return;
+            }
+            const chunk = chunks[chunkIndex++];
+            const speak = () => {
+                if (ttsGen !== startGeneration) { onDone(); return; }
+                const utt = new SpeechSynthesisUtterance(chunk.text);
+                utt.rate   = typeof item.rate  === "number" ? item.rate  : (typeof settings.ttsRate  === "number" ? settings.ttsRate  : 1.0);
+                utt.pitch  = typeof item.pitch === "number" ? item.pitch : (typeof settings.ttsPitch === "number" ? settings.ttsPitch : 1.0);
+                utt.volume = typeof settings.ttsVolume === "number" ? settings.ttsVolume : 1.0;
+                const voiceName = item.voiceName || settings.ttsVoice || "";
+                const allVoices = window.speechSynthesis.getVoices();
+                const resolved  = voiceName ? allVoices.find(v => v.name === voiceName) : null;
+                if (resolved) utt.voice = resolved;
+                utt.onend = speakNextChunk;
+                utt.onerror = speakNextChunk;
+                try { window.speechSynthesis.speak(utt); } catch (_e) { onDone(); }
+            };
+            if (chunk.pauseBefore) window.setTimeout(speak, 240);
+            else speak();
+        };
+
+        speakNextChunk();
     }
 
     function _cancelActive() {
@@ -2774,10 +2868,13 @@ ${(() => {
         if (settings.ttsSkipUrls) text = text.replace(/https?:\/\/\S+/gi, "[link]").trim();
         // Preprocessing: laugh replacements, greentext pauses, CAPS normalisation
         const { text: ppText, rateHint, pitchHint } = _preprocessTTSText(text);
-        // Keep ellipses as a natural pause instead of making the voice say
-        // "ellipsis". This also prevents a browser voice from treating the
-        // punctuation as a spoken truncation marker.
-        text = ppText.replace(/\.{3,}|\u2026/g, ", ").replace(/\s{2,}/g, " ").trim();
+        // Spell ellipses out explicitly. This avoids browser-specific
+        // punctuation behavior while preserving the user's requested wording.
+        text = ppText
+            .replace(/(?:\.\s*){2,}/g, ' dot dot dot')
+            .replace(/(?:\u2026|\u22ef|\u2024)+/g, ' dot dot dot')
+            .replace(/\s{2,}/g, " ")
+            .trim();
         if (!text) return null;
         const phrase = (settings.ttsSpeakUsername && username) ? `${username} says: ${text}` : text;
         const key = username ? username.toLowerCase() : null;
@@ -2981,6 +3078,9 @@ ${(() => {
                 break;
             case 'ttsEnabled':
                 if (!val) { ttsQueue = []; _cancelActive(); }
+                break;
+            case 'experimentalMusicUploader':
+                injectNativeMassUploadButton();
                 break;
         }
     }
@@ -5973,6 +6073,163 @@ ${(() => {
     }
 
     // ─── File upload via drag & drop ─────────────────────────────────────────────
+    function buildMultipartUploadBody(fields, fileField, file) {
+        const boundary = `----BeopUpload${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+        const parts = [];
+        Object.entries(fields).forEach(([name, value]) => {
+            parts.push(
+                `--${boundary}\r\n` +
+                `Content-Disposition: form-data; name="${name}"\r\n\r\n` +
+                `${String(value)}\r\n`
+            );
+        });
+        if (fileField && file) {
+            const filename = String(file.name || 'upload.bin').replace(/["\r\n]/g, '_');
+            const contentType = file.type || 'application/octet-stream';
+            parts.push(
+                `--${boundary}\r\n` +
+                `Content-Disposition: form-data; name="${fileField}"; filename="${filename}"\r\n` +
+                `Content-Type: ${contentType}\r\n\r\n`,
+                file,
+                '\r\n'
+            );
+        }
+        parts.push(`--${boundary}--\r\n`);
+        return {
+            data: new Blob(parts, { type: 'application/octet-stream' }),
+            contentType: `multipart/form-data; boundary=${boundary}`
+        };
+    }
+
+    function uploadHostedFile(data, options = {}) {
+        return new Promise((resolve, reject) => {
+            const signal = options?.signal;
+            const isFile = (typeof Blob !== 'undefined' && data instanceof Blob)
+                || (data && typeof data === 'object'
+                    && typeof data.name === 'string'
+                    && typeof data.size === 'number'
+                    && typeof data.arrayBuffer === 'function');
+            const timeoutMs = Number.isFinite(options?.timeoutMs) ? options.timeoutMs : 45000;
+            let requestHandle = null;
+            let settled = false;
+            const cleanup = () => signal?.removeEventListener?.('abort', abort);
+            const finishResolve = value => {
+                if (settled) return;
+                settled = true;
+                cleanup();
+                resolve(value);
+            };
+            const finishReject = error => {
+                if (settled) return;
+                settled = true;
+                cleanup();
+                reject(error instanceof Error ? error : new Error(String(error || 'Upload failed')));
+            };
+            const abort = () => {
+                if (settled) return;
+                try { requestHandle?.abort?.(); } catch (_) {}
+                finishReject(new Error('Upload aborted.'));
+            };
+            if (signal?.aborted) {
+                abort();
+                return;
+            }
+            signal?.addEventListener?.('abort', abort, { once: true });
+            if (!gmRequest) {
+                finishReject(new Error('The userscript manager did not provide a network request API.'));
+                return;
+            }
+            const provider = settings.uploadProvider || 'catbox';
+            let uploadUrl = 'https://catbox.moe/user/api.php';
+            let uploadFields = isFile
+                ? { reqtype: 'fileupload' }
+                : { reqtype: 'urlupload' };
+            let uploadFileField = isFile ? 'fileToUpload' : '';
+            if (provider === 'filegarden') {
+                if (!settings.filegardenUserId) {
+                    finishReject(new Error('Add your File Garden user ID in Beop settings.'));
+                    return;
+                }
+                uploadUrl = `https://api.filegarden.com/users/${encodeURIComponent(settings.filegardenUserId)}/pipe`;
+                if (!isFile) {
+                    finishReject(new Error('File Garden uploads support files, not URL reposts.'));
+                    return;
+                }
+                uploadFields = {};
+                uploadFileField = 'file';
+            }
+            if (provider === 'cyctorn') {
+                uploadUrl = 'https://safe.cyctorn.tech/api/upload';
+                if (!isFile) {
+                    finishReject(new Error('Cyctorn uploads support files only.'));
+                    return;
+                }
+                uploadFields = {};
+                uploadFileField = 'files[]';
+            }
+            const headers = {};
+            if (provider === 'filegarden' && settings.filegardenToken) headers.Authorization = settings.filegardenToken;
+            if (provider === 'cyctorn' && settings.cyctornToken) headers.token = settings.cyctornToken;
+            let requestData;
+            if (provider === 'catbox') {
+                // Catbox gets an explicit multipart Blob because some userscript
+                // managers serialize FormData as "[object Object]".
+                if (!isFile) uploadFields.url = data;
+                const multipart = buildMultipartUploadBody(uploadFields, uploadFileField, isFile ? data : null);
+                headers['Content-Type'] = multipart.contentType;
+                requestData = multipart.data;
+            } else if (provider === 'filegarden') {
+                // Keep the exact FormData transport used by drag-to-chat for
+                // providers that already handle native FormData correctly.
+                const form = new FormData();
+                form.append('file', data);
+                requestData = form;
+            } else if (provider === 'cyctorn') {
+                const form = new FormData();
+                form.append('files[]', data);
+                requestData = form;
+            } else {
+                const form = new FormData();
+                form.append('reqtype', isFile ? 'fileupload' : 'urlupload');
+                form.append(isFile ? 'fileToUpload' : 'url', data);
+                requestData = form;
+            }
+            try {
+                requestHandle = gmRequest({
+                method: 'POST', url: uploadUrl, data: requestData, headers,
+                    timeout: timeoutMs,
+                onload: r => {
+                        if (settled) return;
+                    if (r.status && (r.status < 200 || r.status >= 300)) {
+                            finishReject(new Error(`Upload server returned ${r.status}.`));
+                        return;
+                    }
+                    const body = String(r.responseText || '').trim();
+                    let u = body;
+                    try {
+                        const json = JSON.parse(body);
+                        if (provider === 'cyctorn') {
+                            u = json.files?.[0]?.url || body;
+                        } else {
+                            u = json.url || json.href || json.location || json.file || body;
+                        }
+                    } catch { }
+                        try { new URL(u); finishResolve(u); }
+                        catch { finishReject(new Error(body || 'Upload failed')); }
+                },
+                    onprogress: progress => {
+                        if (typeof options.onProgress === 'function') options.onProgress(progress);
+                    },
+                    onerror: error => finishReject(error || new Error('Upload failed')),
+                    onabort: () => finishReject(new Error('Upload aborted.')),
+                    ontimeout: () => finishReject(new Error('Upload timed out.')),
+                });
+            } catch (error) {
+                finishReject(error);
+            }
+        });
+    }
+
     function initDragUpload(root) {
         if (!settings.catboxUpload) return;
         const SEL = `input[type="text"], input[type="url"], textarea`;
@@ -5985,60 +6242,6 @@ ${(() => {
             desc?.set?.call(el, v);
             el.dispatchEvent(new Event('input', { bubbles: true }));
             el.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-
-        function upload(data) {
-            return new Promise((resolve, reject) => {
-                const fd = new FormData();
-                fd.append('reqtype', data instanceof File ? 'fileupload' : 'urlupload');
-                fd.append(data instanceof File ? 'fileToUpload' : 'url', data);
-                const provider = settings.uploadProvider || 'catbox';
-                let uploadUrl = 'https://catbox.moe/user/api.php';
-                if (provider === 'filegarden') {
-                    if (!settings.filegardenUserId) {
-                        reject(new Error('Add your File Garden user ID in Beop settings.'));
-                        return;
-                    }
-                    uploadUrl = `https://api.filegarden.com/users/${encodeURIComponent(settings.filegardenUserId)}/pipe`;
-                    fd.delete('reqtype');
-                    fd.delete('url');
-                    if (!(data instanceof File)) {
-                        reject(new Error('File Garden drag upload supports files, not URL reposts.'));
-                        return;
-                    }
-                    fd.delete('fileToUpload');
-                    fd.append('file', data);
-                }
-                if (provider === 'cyctorn') {
-                    uploadUrl = 'https://safe.cyctorn.tech/api/upload';
-                    fd.delete('reqtype');
-                    fd.delete('url');
-                    if (!(data instanceof File)) {
-                        reject(new Error('Cyctorn upload supports files only, not URL reposts.'));
-                        return;
-                    }
-                    fd.delete('fileToUpload');
-                    fd.append('files[]', data);
-                }
-                const headers = {};
-                if (provider === 'filegarden' && settings.filegardenToken) headers.Authorization = settings.filegardenToken;
-                if (provider === 'cyctorn' && settings.cyctornToken) headers.token = settings.cyctornToken;
-                gmRequest({ method: 'POST', url: uploadUrl, data: fd, headers,
-                    onload: r => {
-                        const body = String(r.responseText || '').trim();
-                        let u = body;
-                        try {
-                            const json = JSON.parse(body);
-                            if (provider === 'cyctorn') {
-                                u = json.files?.[0]?.url || body;
-                            } else {
-                                u = json.url || json.href || json.location || json.file || body;
-                            }
-                        } catch { }
-                        try { new URL(u); resolve(u); } catch { reject(new Error(body || 'Upload failed')); }
-                    },
-                    onerror: reject });
-            });
         }
 
         function attach(el) {
@@ -6069,7 +6272,7 @@ ${(() => {
                 if (!payload) return;
                 setVal(el, 'Uploading…');
                 try {
-                    const url = await upload(payload);
+                    const url = await uploadHostedFile(payload);
                     setVal(el, prevContent.slice(0, prevSel) + url + prevContent.slice(prevSel));
                 } catch (err) {
                     console.error('[Enhancer+] Upload error:', err);
@@ -6086,6 +6289,674 @@ ${(() => {
             for (const m of muts) for (const n of m.addedNodes)
                 if (n.nodeType === 1) n.querySelectorAll?.(SEL).forEach(attach);
         }).observe(root, { childList: true, subtree: true });
+    }
+
+    // ─── Music Upload Studio ─────────────────────────────────────────────────────
+    let musicUploaderEl = null;
+    let musicUploadItems = [];
+    let musicUploadSeq = 0;
+    let musicUploadBusy = false;
+    let musicUploadAbortController = null;
+    let musicUploadRunId = 0;
+    let musicUploadStatusVisible = false;
+    let musicUploadStatusPhase = 'idle';
+    let musicUploadStatusDetail = 'Press Shift+X to show upload diagnostics.';
+    let musicUploadStatusLines = [];
+    let musicUploadAutoRequested = false;
+    const MUSIC_UPLOAD_SPLASH_URL = 'https://safe.cyctorn.tech/dnZDNXet.gif';
+    const MUSIC_KAWAII_FACES = [
+        '(｡•ㅅ•｡)', '(๑˃ᴗ˂)ﻭ', '૮ ˶ᵔ ᵕ ᵔ˶ ა',
+        '(≧▽≦)', '(´• ω •`)', '(づ｡◕‿‿◕｡)づ',
+        'ヽ(>∀<☆)ノ', '(｡•̀ᴗ-)✧'
+    ];
+    // Chosen once per script load, so a refresh gives the tab a new face
+    // without changing every time the uploader is opened.
+    const MUSIC_KAWAII_FACE = MUSIC_KAWAII_FACES[Math.floor(Math.random() * MUSIC_KAWAII_FACES.length)];
+
+    function updateMusicUploadStatusPanel() {
+        const panel = musicUploaderEl?.querySelector('#ep-music-upload-status');
+        if (!panel) return;
+        const queueTotal = musicUploadItems.length;
+        const queueDone = musicUploadItems.filter(item => item.url || item.status === 'added').length;
+        panel.textContent = [
+            'MUSIC UPLOAD STATUS',
+            `phase: ${musicUploadStatusPhase}`,
+            `queue: ${queueDone}/${queueTotal}`,
+            `busy: ${musicUploadBusy ? 'yes' : 'no'}`,
+            `detail: ${musicUploadStatusDetail}`,
+            '',
+            ...musicUploadStatusLines
+        ].join('\n');
+    }
+
+    function setMusicUploadStatus(phase, detail) {
+        musicUploadStatusPhase = String(phase || 'unknown');
+        musicUploadStatusDetail = String(detail || '');
+        const stamp = new Date().toLocaleTimeString();
+        musicUploadStatusLines.push(`[${stamp}] ${musicUploadStatusPhase}: ${musicUploadStatusDetail}`);
+        musicUploadStatusLines = musicUploadStatusLines.slice(-12);
+        updateMusicUploadStatusPanel();
+    }
+
+    function toggleMusicUploadStatus() {
+        if (!settings.experimentalMusicUploader || !musicUploaderEl) return;
+        musicUploadStatusVisible = !musicUploadStatusVisible;
+        let panel = musicUploaderEl.querySelector('#ep-music-upload-status');
+        if (musicUploadStatusVisible && !panel) {
+            panel = document.createElement('pre');
+            panel.id = 'ep-music-upload-status';
+            panel.style.cssText = [
+                'position:fixed',
+                'left:14px',
+                'bottom:14px',
+                'z-index:10030',
+                'width:min(440px,calc(100vw - 28px))',
+                'max-height:42vh',
+                'overflow:auto',
+                'margin:0',
+                'padding:10px 12px',
+                'box-sizing:border-box',
+                'border:1px solid rgba(255,255,255,.2)',
+                'border-radius:8px',
+                'background:rgba(8,8,10,.94)',
+                'box-shadow:0 8px 30px rgba(0,0,0,.55)',
+                'color:#b9f6c5',
+                'font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace',
+                'white-space:pre-wrap',
+                'pointer-events:none'
+            ].join(';');
+            musicUploaderEl.appendChild(panel);
+        }
+        if (!musicUploadStatusVisible && panel) panel.remove();
+        updateMusicUploadStatusPanel();
+    }
+
+    function musicTitleFromFilename(filename) {
+        return String(filename || '')
+            .replace(/\.[^.]+$/, '')
+            .replace(/[_-]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .replace(/\b\w/g, c => c.toUpperCase()) || 'Untitled Track';
+    }
+
+    function formatMusicBytes(bytes) {
+        if (!isFinite(bytes) || bytes < 1024) return `${bytes || 0} B`;
+        const units = ['KB', 'MB', 'GB'];
+        let n = bytes / 1024, i = 0;
+        while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+        return `${n.toFixed(n >= 10 ? 0 : 1)} ${units[i]}`;
+    }
+
+    function formatMusicDuration(seconds) {
+        if (!isFinite(seconds) || seconds <= 0) return 'duration unknown';
+        const total = Math.round(seconds);
+        return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+    }
+
+    async function readMusicMetadata(file) {
+        let title = '';
+        try {
+            const header = new Uint8Array(await file.slice(0, 65536).arrayBuffer());
+            title = parseID3Title(header) || '';
+        } catch { }
+
+        const duration = await new Promise(resolve => {
+            const url = URL.createObjectURL(file);
+            const audio = document.createElement('audio');
+            let finished = false;
+            const done = value => {
+                if (finished) return;
+                finished = true;
+                URL.revokeObjectURL(url);
+                audio.removeAttribute('src');
+                audio.load();
+                resolve(value || 0);
+            };
+            audio.preload = 'metadata';
+            audio.addEventListener('loadedmetadata', () => done(audio.duration), { once: true });
+            audio.addEventListener('error', () => done(0), { once: true });
+            audio.src = url;
+            setTimeout(() => done(0), 5000);
+        });
+        return { title: title || musicTitleFromFilename(file.name), duration };
+    }
+
+    function musicUploadStatusText(item) {
+        if (item.status === 'reading') return 'Reading metadata...';
+        if (item.status === 'uploading') return 'Uploading...';
+        if (item.status === 'filling') return 'Filling music form...';
+        if (item.status === 'added') return 'Added to music form';
+        if (item.status === 'ready') return 'Uploaded, ready to paste';
+        if (item.status === 'error') return item.error || 'Upload failed';
+        return 'Waiting';
+    }
+
+    function renderMusicUploadQueue() {
+        const list = musicUploaderEl?.querySelector('#ep-music-upload-list');
+        const count = musicUploaderEl?.querySelector('#ep-music-upload-count');
+        if (!list) return;
+        if (count) count.textContent = musicUploadItems.length
+            ? `${musicUploadItems.length} file${musicUploadItems.length === 1 ? '' : 's'}`
+            : 'No files queued';
+        if (!musicUploadItems.length) {
+            list.innerHTML = '<div style="padding:22px;text-align:center;color:#666;font-size:12px;">Drop audio files above to begin.</div>';
+            return;
+        }
+        list.innerHTML = musicUploadItems.map(item => `
+            <div data-music-row="${item.id}" style="display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;padding:9px 10px;border-bottom:1px solid #292929;">
+                <div style="min-width:0;">
+                    <input data-music-title="${item.id}" value="${escapeHTML(item.title)}"
+                        style="width:100%;box-sizing:border-box;background:#111;border:1px solid #333;color:#eee;border-radius:5px;padding:5px 7px;font-size:12px;">
+                    <div style="display:flex;gap:8px;align-items:center;margin-top:4px;color:#777;font-size:10px;">
+                        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHTML(item.file.name)}</span>
+                        <span>${formatMusicBytes(item.file.size)}</span>
+                        <span>${formatMusicDuration(item.duration)}</span>
+                    </div>
+                    ${item.url ? `<div style="margin-top:3px;color:#71c58a;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHTML(item.url)}">${escapeHTML(item.url)}</div>` : ''}
+                    ${item.error ? `<div style="margin-top:3px;color:#ff8075;font-size:10px;">${escapeHTML(item.error)}</div>` : ''}
+                </div>
+                <div style="display:flex;align-items:center;gap:6px;white-space:nowrap;">
+                    <span style="color:${item.status === 'error' ? '#ff8075' : item.status === 'added' ? '#71c58a' : '#999'};font-size:10px;">${escapeHTML(musicUploadStatusText(item))}</span>
+                    ${item.url ? `<button class="ep-btn secondary ep-music-copy-url" data-music-id="${item.id}" style="padding:4px 7px;font-size:10px;">Copy URL</button>` : ''}
+                    ${item.url && item.status === 'ready' ? `<button class="ep-btn secondary ep-music-fill-form" data-music-id="${item.id}" style="padding:4px 7px;font-size:10px;">Fill Form</button>` : ''}
+                    <button class="ep-msg-btn ep-music-remove" data-music-id="${item.id}" title="Remove" ${musicUploadBusy ? 'disabled' : ''}>×</button>
+                </div>
+            </div>
+        `).join('');
+
+        list.querySelectorAll('[data-music-title]').forEach(input => {
+            input.addEventListener('input', () => {
+                const item = musicUploadItems.find(i => String(i.id) === input.dataset.musicTitle);
+                if (item) item.title = input.value;
+            });
+        });
+        list.querySelectorAll('.ep-music-remove').forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (musicUploadBusy) return;
+                musicUploadItems = musicUploadItems.filter(i => String(i.id) !== btn.dataset.musicId);
+                renderMusicUploadQueue();
+            });
+        });
+        list.querySelectorAll('.ep-music-copy-url').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const item = musicUploadItems.find(i => String(i.id) === btn.dataset.musicId);
+                if (!item?.url) return;
+                try {
+                    await navigator.clipboard.writeText(item.url);
+                    showToast('Music URL copied.');
+                } catch {
+                    showToast('Could not access the clipboard. Copy the URL shown in the row.');
+                }
+            });
+        });
+        list.querySelectorAll('.ep-music-fill-form').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                if (musicUploadBusy) return;
+                const item = musicUploadItems.find(i => String(i.id) === btn.dataset.musicId);
+                if (!item?.url) return;
+                musicUploadBusy = true;
+                item.status = 'filling';
+                item.error = '';
+                renderMusicUploadQueue();
+                const filled = await fillNativeMusicEntryWithRetry(item);
+                item.status = filled ? 'added' : 'ready';
+                musicUploadBusy = false;
+                renderMusicUploadQueue();
+                showToast(filled ? 'Music form filled.' : 'The music form was not ready. You can retry.');
+            });
+        });
+    }
+
+    function addMusicFiles(fileList) {
+        if (!settings.experimentalMusicUploader) return;
+        const files = [...(fileList || [])].filter(file =>
+            file.type?.startsWith('audio/') || /\.(mp3|m4a|wav|ogg|oga|flac|aac|opus|webm)$/i.test(file.name)
+        );
+        if (!files.length) {
+            showToast('Drop audio files such as MP3, WAV, M4A, OGG, or FLAC.');
+            return;
+        }
+        files.forEach(file => {
+            const item = {
+                id: ++musicUploadSeq, file,
+                title: musicTitleFromFilename(file.name),
+                duration: 0, url: '', status: 'reading', error: '',
+            };
+            musicUploadItems.push(item);
+            setMusicUploadStatus('queued', `${musicUploadItems.length} file(s); added ${item.file.name}`);
+            item.metadataPromise = readMusicMetadata(file).then(meta => {
+                item.title = meta.title || item.title;
+                item.duration = meta.duration || 0;
+                item.status = 'queued';
+                renderMusicUploadQueue();
+            }).catch(() => {
+                item.status = 'queued';
+                renderMusicUploadQueue();
+            });
+        });
+        renderMusicUploadQueue();
+        // Start hosting immediately after files are added. The button is only
+        // for filling objection.lol's native music forms after URLs exist.
+        window.setTimeout(() => uploadMusicQueue({ automatic: true }), 0);
+    }
+
+    function setMusicFieldValue(el, value) {
+        if (!el) return;
+        const proto = Object.getPrototypeOf(el);
+        const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+        if (desc?.set) desc.set.call(el, value);
+        else el.value = value;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    function getMusicFieldText(el) {
+        const parent = el.closest('label, .MuiFormControl-root, .MuiTextField-root, .MuiInputBase-root, div');
+        return [
+            el.getAttribute('aria-label'), el.getAttribute('placeholder'),
+            el.getAttribute('name'), el.getAttribute('id'),
+            [...(el.labels || [])].map(label => label.textContent).join(' '),
+            parent?.textContent,
+        ].filter(Boolean).join(' ').toLowerCase();
+    }
+
+    function visibleNativeMusicScope() {
+        const candidates = [...document.querySelectorAll(
+            '[role="dialog"], .MuiDialog-root, .MuiPopover-root, .MuiMenu-paper, .MuiModal-root'
+        )].filter(el => el.offsetParent !== null);
+        return candidates[candidates.length - 1] || document.body;
+    }
+
+    function findNativeAddMusicButton(scope = document) {
+        return [...scope.querySelectorAll('button, [role="button"]')].find(el => {
+            if (el.closest('#ep-panel, #ep-music-upload')) return false;
+            if (el.offsetParent === null) return false;
+            return /(?:add\s+music|music\s*\+)/i.test((el.textContent || '').trim());
+        });
+    }
+
+    function findNativeMusicAssetsScope() {
+        const roots = [...document.querySelectorAll(
+            '[role="dialog"], .MuiDialog-root, .MuiPopover-root, .MuiMenu-paper, .MuiModal-root'
+        )].filter(el => el.offsetParent !== null);
+        for (let i = roots.length - 1; i >= 0; i--) {
+            const root = roots[i];
+            if (findNativeAddMusicButton(root) || /\bmy\s+assets\b/i.test(root.textContent || '')) return root;
+        }
+        return null;
+    }
+
+    function hideMusicMassUploader() {
+        if (musicUploadBusy) {
+            ++musicUploadRunId;
+            musicUploadAbortController?.abort?.();
+            musicUploadAbortController = null;
+            musicUploadBusy = false;
+            musicUploadAutoRequested = false;
+        }
+        document.querySelectorAll('#ep-native-mass-upload-btn').forEach(button => button.remove());
+        if (musicUploaderEl) {
+            musicUploaderEl.remove();
+            musicUploaderEl = null;
+        }
+        musicUploadItems = [];
+    }
+
+    function injectNativeMassUploadButton() {
+        if (!settings.experimentalMusicUploader) {
+            hideMusicMassUploader();
+            return;
+        }
+        const scope = findNativeMusicAssetsScope();
+        if (!scope || scope.querySelector('#ep-native-mass-upload-btn')) return;
+        const addButton = findNativeAddMusicButton(scope);
+        if (!addButton) return;
+
+        const button = document.createElement('button');
+        button.id = 'ep-native-mass-upload-btn';
+        button.type = 'button';
+        button.textContent = 'MASS UPLOAD';
+        button.title = 'Upload several music tracks at once';
+        button.style.cssText = [
+            'margin-right:8px',
+            'min-height:36px',
+            'padding:0 14px',
+            'border:1px solid rgba(255,255,255,.2)',
+            'border-radius:4px',
+            'background:#342b35',
+            'color:#f6d8ed',
+            'font:600 12px/1 Arial,sans-serif',
+            'cursor:pointer'
+        ].join(';');
+        button.addEventListener('mouseenter', () => { button.style.background = '#49384b'; });
+        button.addEventListener('mouseleave', () => { button.style.background = '#342b35'; });
+        button.addEventListener('click', openMusicUploader);
+
+        addButton.parentElement?.insertBefore(button, addButton);
+    }
+
+    function clickNativeAssetsButton() {
+        const selectors = [
+            '[aria-label*="asset" i]', '[aria-label*="evidence" i]',
+            '[aria-label*="music" i]', '[title*="asset" i]',
+            '[title*="evidence" i]', '[data-testid*="asset" i]',
+            '[data-testid*="evidence" i]',
+        ];
+        for (const selector of selectors) {
+            const button = [...document.querySelectorAll(selector)].find(el =>
+                el.offsetParent !== null && !el.closest('#ep-panel, #ep-music-upload')
+            );
+            if (button) { button.click(); return true; }
+        }
+        return false;
+    }
+
+    function throwIfMusicUploadAborted(signal) {
+        if (signal?.aborted) throw new Error('Upload aborted.');
+    }
+
+    async function prepareNativeMusicEntry(item, signal) {
+        throwIfMusicUploadAborted(signal);
+        setMusicUploadStatus('native-scan', `looking for the music form for ${item.title || item.file?.name || 'track'}`);
+        let scope = visibleNativeMusicScope();
+        let fields = [...scope.querySelectorAll('input:not([type="hidden"]), textarea')];
+        const alreadyOpen = fields.some(el => /name|title|track/i.test(getMusicFieldText(el)))
+            && fields.some(el => /url|link|audio|source|file/i.test(getMusicFieldText(el)) || el.type === 'url');
+
+        if (!alreadyOpen) {
+            let assetsScope = findNativeMusicAssetsScope();
+            if (!assetsScope) {
+                setMusicUploadStatus('native-assets', 'assets dialog was not open; opening it');
+                if (!clickNativeAssetsButton()) return false;
+                await new Promise(resolve => setTimeout(resolve, 450));
+                throwIfMusicUploadAborted(signal);
+                assetsScope = findNativeMusicAssetsScope() || visibleNativeMusicScope();
+            }
+
+            let addMusic = findNativeAddMusicButton(assetsScope);
+            if (!addMusic) {
+                setMusicUploadStatus('native-tab', 'switching to the Music tab');
+                const musicTab = [...assetsScope.querySelectorAll('button, [role="tab"], [role="button"]')]
+                    .find(el => /^(music|audio)$/i.test((el.textContent || '').trim()));
+                if (!musicTab) return false;
+                musicTab.click();
+                await new Promise(resolve => setTimeout(resolve, 350));
+                throwIfMusicUploadAborted(signal);
+                assetsScope = findNativeMusicAssetsScope() || visibleNativeMusicScope();
+                addMusic = findNativeAddMusicButton(assetsScope);
+            }
+            if (!addMusic) return false;
+            setMusicUploadStatus('native-add', 'opening Add Music');
+            addMusic.click();
+            await new Promise(resolve => setTimeout(resolve, 350));
+            throwIfMusicUploadAborted(signal);
+            scope = visibleNativeMusicScope();
+            fields = [...scope.querySelectorAll('input:not([type="hidden"]), textarea')];
+        }
+
+        throwIfMusicUploadAborted(signal);
+        setMusicUploadStatus('native-fields', 'searching for title and URL fields');
+        const nameField = fields.find(el => /name|title|track/i.test(getMusicFieldText(el)));
+        const urlField = fields.find(el => el !== nameField && (
+            el.type === 'url' || /url|link|audio|source|file/i.test(getMusicFieldText(el))
+        )) || fields.find(el => el !== nameField);
+        if (nameField) setMusicFieldValue(nameField, item.title);
+        if (urlField) setMusicFieldValue(urlField, item.url);
+        if (!nameField && !urlField) {
+            setMusicUploadStatus('native-missing-fields', 'could not find title or URL fields');
+            return false;
+        }
+        const submit = [...scope.querySelectorAll('button, [role="button"]')].find(el =>
+            /\b(add|save|upload|submit|create)\b/i.test((el.textContent || '').trim()) && !el.disabled
+        );
+        if (nameField && urlField && submit) {
+            throwIfMusicUploadAborted(signal);
+            setMusicUploadStatus('native-submit', 'submitting the music form');
+            submit.click();
+            // Let objection.lol close the entry dialog before the next track
+            // opens its own form. Without this, a fast queue can reuse the
+            // previous dialog and appear to stop on one item.
+            await new Promise(resolve => setTimeout(resolve, 450));
+            throwIfMusicUploadAborted(signal);
+            return true;
+        }
+        setMusicUploadStatus('native-no-submit', 'title and URL found, but no enabled submit button');
+        return false;
+    }
+
+    async function fillNativeMusicEntryWithRetry(item, signal) {
+        let lastError = '';
+        for (let attempt = 0; attempt < 3; attempt++) {
+            throwIfMusicUploadAborted(signal);
+            try {
+                const result = await Promise.race([
+                    prepareNativeMusicEntry(item, signal),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Music form timed out.')), 6000))
+                ]);
+                if (result) return true;
+                lastError = 'The Add Music form was not ready.';
+            } catch (err) {
+                if (signal?.aborted) throw err;
+                lastError = err?.message || 'The Add Music form was not ready.';
+            }
+            if (attempt < 2) {
+                await new Promise(resolve => setTimeout(resolve, 450));
+                throwIfMusicUploadAborted(signal);
+            }
+        }
+        item.error = `${lastError} Press Fill Form to retry.`;
+        return false;
+    }
+
+    async function uploadMusicQueue({ autoFill = false, onlyUploaded = false, automatic = false } = {}) {
+        if (!settings.experimentalMusicUploader) return;
+        if (musicUploadBusy) {
+            if (automatic) musicUploadAutoRequested = true;
+            return;
+        }
+        const pending = onlyUploaded
+            ? musicUploadItems.filter(item => item.url && item.status === 'ready')
+            : musicUploadItems.filter(item => !item.url || (autoFill && item.status === 'ready'));
+        if (!pending.length) {
+            showToast(onlyUploaded
+                ? 'There are no uploaded tracks waiting to fill.'
+                : 'There are no tracks waiting to upload.');
+            return;
+        }
+        musicUploadBusy = true;
+        const runId = ++musicUploadRunId;
+        const abortController = new AbortController();
+        musicUploadAbortController = abortController;
+        const signal = abortController.signal;
+        setMusicUploadStatus('started', `${pending.length} pending item(s); ${automatic ? 'automatic upload' : autoFill ? 'fill mode' : 'upload mode'}`);
+        const uploadBtn = musicUploaderEl?.querySelector('#ep-music-upload-all');
+        const splash = musicUploaderEl?.querySelector('#ep-music-upload-splash');
+        const splashImg = musicUploaderEl?.querySelector('#ep-music-upload-splash-image');
+        if (uploadBtn) uploadBtn.disabled = true;
+        if (splashImg) {
+            splashImg.src = MUSIC_UPLOAD_SPLASH_URL;
+            splashImg.style.display = 'block';
+        }
+        if (splash) splash.style.display = 'flex';
+        for (const [pendingIndex, item] of pending.entries()) {
+            if (signal.aborted || runId !== musicUploadRunId) return;
+            const needsUpload = !item.url;
+            item.status = needsUpload ? 'uploading' : 'filling';
+            item.error = '';
+            const order = `${pendingIndex + 1}/${pending.length}`;
+            setMusicUploadStatus('begin-item', `${order} ${item.title || item.file.name}`);
+            renderMusicUploadQueue();
+            try {
+                if (needsUpload) {
+                    setMusicUploadStatus('metadata', `${order} waiting for ${item.file.name}`);
+                    if (item.metadataPromise) {
+                        await Promise.race([
+                            item.metadataPromise,
+                            new Promise(resolve => setTimeout(resolve, 7000))
+                        ]);
+                    }
+                    if (signal.aborted || runId !== musicUploadRunId) return;
+                    setMusicUploadStatus('uploading', `${order} sending ${item.file.name} to ${settings.uploadProvider || 'catbox'}`);
+                    item.url = await uploadHostedFile(item.file, {
+                        signal,
+                        timeoutMs: 45000,
+                        onProgress: progress => {
+                            if (!progress?.loaded) return;
+                            const total = progress.lengthComputable && progress.total
+                                ? `/${formatMusicBytes(progress.total)}`
+                                : '';
+                            setMusicUploadStatus('uploading',
+                                `${order} transport progress ${formatMusicBytes(progress.loaded)}${total}`);
+                        }
+                    });
+                    item.status = 'ready';
+                    setMusicUploadStatus('uploaded', `${order} received ${item.url}`);
+                    renderMusicUploadQueue();
+                }
+                if (signal.aborted || runId !== musicUploadRunId) return;
+                if (autoFill && item.url && item.status !== 'added') {
+                    item.status = 'filling';
+                    setMusicUploadStatus('filling', `${order} opening/filling the native music form`);
+                    if (await fillNativeMusicEntryWithRetry(item, signal)) item.status = 'added';
+                    else {
+                        item.status = 'ready';
+                        if (!item.error) item.error = 'The Add Music form was not ready. Press Fill Form to retry.';
+                    }
+                    setMusicUploadStatus(item.status === 'added' ? 'added' : 'fill-waiting',
+                        `${order} ${item.status === 'added' ? 'native form submitted' : (item.error || 'native form was not ready')}`);
+                } else {
+                    setMusicUploadStatus('ready', `${order} uploaded; auto-fill is off`);
+                }
+            } catch (err) {
+                if (signal.aborted || runId !== musicUploadRunId) return;
+                item.status = 'error';
+                item.error = err?.message || 'Upload failed';
+                setMusicUploadStatus('error', `${order} ${item.error}`);
+            }
+            renderMusicUploadQueue();
+        }
+        if (runId !== musicUploadRunId) return;
+        if (splash) splash.style.display = 'none';
+        musicUploadBusy = false;
+        musicUploadAbortController = null;
+        if (uploadBtn) uploadBtn.disabled = false;
+        setMusicUploadStatus('finished', 'queue loop completed');
+        showToast(automatic ? 'Uploads finished. Click Fill Music Forms.' : 'Music forms finished.');
+        if (musicUploadAutoRequested) {
+            musicUploadAutoRequested = false;
+            window.setTimeout(() => uploadMusicQueue({ automatic: true }), 0);
+        }
+    }
+
+    function abortMusicUploadQueue() {
+        if (!musicUploadBusy) return false;
+        ++musicUploadRunId;
+        musicUploadAbortController?.abort?.();
+        musicUploadAbortController = null;
+        const activeItem = musicUploadItems.find(item =>
+            item.status === 'uploading' || item.status === 'filling' || item.status === 'reading'
+        );
+        if (activeItem) {
+            activeItem.status = activeItem.url ? 'ready' : 'queued';
+            activeItem.error = 'Upload aborted. Drop the file again to retry.';
+        }
+        musicUploadAutoRequested = false;
+        musicUploadBusy = false;
+        setMusicUploadStatus('aborted', 'user cancelled the active queue');
+        const splash = musicUploaderEl?.querySelector('#ep-music-upload-splash');
+        const uploadBtn = musicUploaderEl?.querySelector('#ep-music-upload-all');
+        if (splash) splash.style.display = 'none';
+        if (uploadBtn) uploadBtn.disabled = false;
+        renderMusicUploadQueue();
+        showToast('Music upload aborted.');
+        return true;
+    }
+
+    function openMusicUploader() {
+        if (!settings.experimentalMusicUploader) return;
+        if (musicUploaderEl) {
+            musicUploaderEl.style.display = 'flex';
+            return;
+        }
+        const overlay = document.createElement('div');
+        overlay.id = 'ep-music-upload';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:10020;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.68);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;';
+        overlay.innerHTML = `
+            <div style="position:relative;width:min(760px,calc(100vw - 28px));max-height:min(720px,calc(100vh - 28px));display:flex;flex-direction:column;overflow:hidden;background:#121214;color:#ddd;border:1px solid #343438;border-radius:12px;box-shadow:0 20px 80px #000;">
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:13px 16px;background:linear-gradient(110deg,rgba(224,90,43,.22),rgba(24,24,27,.95));border-bottom:1px solid #303035;">
+                    <div><strong style="font-size:15px;color:#fff;">Mass Upload</strong></div>
+                    <button id="ep-music-upload-close" class="ep-msg-btn" style="font-size:18px;padding:1px 8px;">×</button>
+                </div>
+                <div style="padding:14px;overflow:auto;">
+                    <input id="ep-music-upload-input" type="file" accept="audio/*,.mp3,.m4a,.wav,.ogg,.oga,.flac,.aac,.opus,.webm" multiple style="display:none;">
+                    <div id="ep-music-dropzone" style="padding:25px 16px;text-align:center;border:1px dashed #555;border-radius:9px;background:rgba(255,255,255,.025);cursor:pointer;color:#aaa;">
+                        <div style="font-size:20px;color:#e8a6c8;min-height:28px;display:flex;align-items:center;justify-content:center;">${MUSIC_KAWAII_FACE}</div>
+                        <strong style="color:#ddd;">Drop audio files here</strong>
+                        <div style="font-size:11px;margin-top:5px;">or click to choose multiple files</div>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin:13px 0 7px;">
+                        <strong style="font-size:12px;color:#ccc;">Queue</strong>
+                        <span id="ep-music-upload-count" style="font-size:11px;color:#777;">No files queued</span>
+                    </div>
+                    <div id="ep-music-upload-list" style="border:1px solid #292929;border-radius:8px;background:#19191b;overflow:hidden;"></div>
+                    <div style="margin-top:10px;color:#999;font-size:11px;">
+                        Files upload automatically when added. Use Fill Music Forms after the hosted URLs are ready.
+                    </div>
+                </div>
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:11px 14px;border-top:1px solid #292929;background:#171719;">
+                    <span style="font-size:10px;color:#666;">Provider: ${escapeHTML(settings.uploadProvider || 'catbox')}</span>
+                    <div style="display:flex;gap:7px;">
+                        <button id="ep-music-clear" class="ep-btn secondary" style="padding:6px 10px;font-size:11px;">Clear</button>
+                        <button id="ep-music-upload-all" class="ep-btn" style="padding:6px 12px;font-size:11px;">Fill Music Forms</button>
+                    </div>
+                </div>
+                <div id="ep-music-upload-splash" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;flex-direction:column;gap:10px;background:rgba(8,8,10,.94);">
+                    <img id="ep-music-upload-splash-image" src="https://safe.cyctorn.tech/dnZDNXet.gif" alt="" style="display:block;max-width:52%;max-height:42%;object-fit:contain;border-radius:9px;">
+                    <span style="font-size:11px;color:#999;">esc to abort</span>
+                </div>
+            </div>`;
+        document.body.appendChild(overlay);
+        musicUploaderEl = overlay;
+        const input = overlay.querySelector('#ep-music-upload-input');
+        const dropzone = overlay.querySelector('#ep-music-dropzone');
+        dropzone.addEventListener('click', () => input.click());
+        input.addEventListener('change', () => {
+            addMusicFiles(input.files);
+            input.value = '';
+        });
+        dropzone.addEventListener('dragover', e => {
+            e.preventDefault();
+            dropzone.style.borderColor = '#e05a2b';
+            dropzone.style.background = 'rgba(224,90,43,.1)';
+        });
+        dropzone.addEventListener('dragleave', () => {
+            dropzone.style.borderColor = '#555';
+            dropzone.style.background = 'rgba(255,255,255,.025)';
+        });
+        dropzone.addEventListener('drop', e => {
+            e.preventDefault();
+            dropzone.style.borderColor = '#555';
+            dropzone.style.background = 'rgba(255,255,255,.025)';
+            addMusicFiles(e.dataTransfer.files);
+        });
+        overlay.querySelector('#ep-music-upload-close').addEventListener('click', () => {
+            if (musicUploadBusy) {
+                abortMusicUploadQueue();
+                return;
+            }
+            overlay.remove();
+            musicUploaderEl = null;
+        });
+        overlay.querySelector('#ep-music-clear').addEventListener('click', () => {
+            if (musicUploadBusy) return;
+            musicUploadItems = [];
+            renderMusicUploadQueue();
+        });
+        overlay.querySelector('#ep-music-upload-all').addEventListener('click', () =>
+            uploadMusicQueue({ autoFill: true, onlyUploaded: true })
+        );
+        renderMusicUploadQueue();
     }
 
     // ─── Clock ────────────────────────────────────────────────────────
@@ -6388,6 +7259,68 @@ ${(() => {
     }
     function hideReplyBar() {
         document.getElementById('ep-reply-bar')?.classList.remove('visible');
+    }
+
+    // ─── Settings backup ─────────────────────────────────────────────────────────
+    function downloadTextFile(filename, content, mime = 'text/plain') {
+        const blob = new Blob([content], { type: mime });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    function exportSettingsFile() {
+        const payload = {
+            format: 'beop-settings',
+            version: 1,
+            exportedAt: new Date().toISOString(),
+            settings: Object.assign({}, settings),
+        };
+        const stamp = new Date().toISOString().slice(0, 10);
+        downloadTextFile(`beop-settings-${stamp}.cfg`, JSON.stringify(payload, null, 2), 'application/json');
+        showToast('Settings exported as .cfg');
+    }
+
+    async function importSettingsFile(file) {
+        try {
+            const parsed = JSON.parse(await file.text());
+            const incoming = parsed?.settings && typeof parsed.settings === 'object'
+                ? parsed.settings
+                : parsed;
+            if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) {
+                throw new Error('This is not a Beop settings file.');
+            }
+
+            const imported = {};
+            Object.keys(DEFAULTS).forEach(key => {
+                if (Object.prototype.hasOwnProperty.call(incoming, key)) imported[key] = incoming[key];
+            });
+            if (!Object.keys(imported).length) {
+                throw new Error('No recognized Beop settings were found.');
+            }
+            if (!confirm(`Import ${Object.keys(imported).length} Beop settings and overwrite the current values?`)) return;
+
+            settings = Object.assign({}, DEFAULTS, imported);
+            autoScrollEnabled = !!settings.autoScroll;
+            saveSettings();
+            applyReskinCSS();
+            applyBackground();
+            applyCustomCSS();
+            initClock();
+            updateEvidenceFix();
+            updateHostStatus();
+            rebuildPanel();
+            injectNativeMassUploadButton();
+            showToast(`Imported ${Object.keys(imported).length} settings.`, 3500);
+        } catch (err) {
+            console.error('[Beop] Settings import failed:', err);
+            showToast('Settings import failed: ' + (err.message || 'invalid file'), 4500);
+        }
     }
 
     // ─── Chat export ─────────────────────────────────────────────────────────────
@@ -6706,6 +7639,20 @@ ${(() => {
 
     // ─── Hotkeys ─────────────────────────────────────────────────────────────────
     document.addEventListener('keydown', ev => {
+        if (ev.shiftKey && !ev.ctrlKey && !ev.altKey && !ev.metaKey
+            && String(ev.key || '').toLowerCase() === 'x'
+            && settings.experimentalMusicUploader && musicUploaderEl) {
+            ev.preventDefault();
+            ev.stopImmediatePropagation();
+            toggleMusicUploadStatus();
+            return;
+        }
+        if (ev.key === 'Escape' && musicUploadBusy) {
+            ev.preventDefault();
+            ev.stopImmediatePropagation();
+            abortMusicUploadQueue();
+            return;
+        }
         if (ev.key === 'Escape' && Object.keys(activeFramePopups).length) {
             dismissAllFramePopups(true);
             ev.stopPropagation();
@@ -7081,6 +8028,7 @@ ${(() => {
         applyReskinCSS();
         createCourtroomBar();
         createTopCover();
+        injectNativeMassUploadButton();
 
         const chatList = findChatList();
         createFilterBar();
@@ -7104,7 +8052,10 @@ ${(() => {
 
     function startLayoutWatcher() {
         if (epLayoutMo) return;
-        const root = document.getElementById('root') || document.body;
+        // MUI dialogs are rendered in a body-level portal, outside #root.
+        // Watch the body so the Mass Upload button can be placed beside the
+        // native Add Music button when My Assets opens.
+        const root = document.body || document.getElementById('root');
         epLayoutMo = new MutationObserver(() => {
             if (epLayoutTick) return;
             epLayoutTick = window.setTimeout(() => {
@@ -7116,6 +8067,7 @@ ${(() => {
                 }
                 const st = findSettingsTab();
                 if (st) addSettingsButton(st);
+                injectNativeMassUploadButton();
                 updateNativeTabState();
                 updateStatusBar();
                 updateRoomTitle();
