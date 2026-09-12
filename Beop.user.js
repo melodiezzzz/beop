@@ -2774,7 +2774,10 @@ ${(() => {
         if (settings.ttsSkipUrls) text = text.replace(/https?:\/\/\S+/gi, "[link]").trim();
         // Preprocessing: laugh replacements, greentext pauses, CAPS normalisation
         const { text: ppText, rateHint, pitchHint } = _preprocessTTSText(text);
-        text = ppText.replace(/\.{3,}|\u2026/g, " ellipsis ").replace(/\s{2,}/g, " ").trim();
+        // Keep ellipses as a natural pause instead of making the voice say
+        // "ellipsis". This also prevents a browser voice from treating the
+        // punctuation as a spoken truncation marker.
+        text = ppText.replace(/\.{3,}|\u2026/g, ", ").replace(/\s{2,}/g, " ").trim();
         if (!text) return null;
         const phrase = (settings.ttsSpeakUsername && username) ? `${username} says: ${text}` : text;
         const key = username ? username.toLowerCase() : null;
