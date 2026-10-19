@@ -1189,18 +1189,26 @@ body.ep-has-bg > #root { position: relative; z-index: 1; }
 
 #ep-gif-grid {
     overflow-y: auto; overflow-x: hidden;
+    scrollbar-width: thin;
     padding: 8px 8px 6px;
-    columns: 2; column-gap: 5px;
     flex: 1;
+    min-height: 0;
+    overscroll-behavior: contain;
+}
+/* Inner columns wrapper: multicol on a non-scrolling box scrolls fine in
+   Firefox (multicol + overflow on the same element breaks scrolling there). */
+#ep-gif-cols {
+    columns: 2; column-gap: 5px;
 }
 #ep-gif-grid::-webkit-scrollbar { width: 3px; }
 #ep-gif-grid::-webkit-scrollbar-track { background: transparent; }
 #ep-gif-grid::-webkit-scrollbar-thumb { background: #252525; border-radius: 2px; }
 
 .ep-gif-item {
-    break-inside: avoid; display: block;
+    break-inside: avoid; display: inline-block; width: 100%;
+    vertical-align: top;
     overflow: hidden; border-radius: 7px; cursor: pointer;
-    background: #0d0d0f; margin-bottom: 5px;
+    background: #0d0d0f; margin: 0 0 5px;
     transition: opacity .1s, transform .1s;
     border: 1px solid rgba(255,255,255,0.035);
     position: relative;
@@ -1209,8 +1217,12 @@ body.ep-has-bg > #root { position: relative; z-index: 1; }
 .ep-gif-item img { width: 100%; height: auto; display: block; }
 
 .ep-gif-empty {
-    column-span: all; text-align: center;
+    text-align: center;
     color: #333; font-size: 12px; padding: 44px 0;
+}
+.ep-gif-loading {
+    text-align: center;
+    color: #555; font-size: 11px; padding: 10px 0;
 }
 
 /* GIF Picker tabs */
@@ -5680,18 +5692,23 @@ ${(() => {
     let gifPickerOpen = false;
     let gifSearchTimer = null;
     let gifActiveTab = 'search';
+    let gifQuery = '';
+    let gifOffset = 0;
+    let gifLoading = false;
+    let gifHasMore = true;
+    const GIF_PAGE_SIZE = 20;
 
     function getGiphyKey() {
         return (settings.giphyApiKey || '').trim();
     }
 
-    function fetchGiphyGifs(query, cb) {
+    function fetchGiphyGifs(query, offset, cb) {
         if (!gmRequest) { cb([]); return; }
         const key = getGiphyKey();
         if (!key) { cb([]); return; }
         const url = query
-            ? `https://api.giphy.com/v1/gifs/search?api_key=${key}&q=${encodeURIComponent(query)}&limit=20&rating=g`
-            : `https://api.giphy.com/v1/gifs/trending?api_key=${key}&limit=20&rating=g`;
+            ? `https://api.giphy.com/v1/gifs/search?api_key=${key}&q=${encodeURIComponent(query)}&limit=${GIF_PAGE_SIZE}&offset=${offset || 0}&rating=g`
+            : `https://api.giphy.com/v1/gifs/trending?api_key=${key}&limit=${GIF_PAGE_SIZE}&offset=${offset || 0}&rating=g`;
         gmRequest({
             method: 'GET', url,
             responseType: 'json',
@@ -5728,15 +5745,15 @@ ${(() => {
         return null;
     }
 
-    function fetchKlipyGifs(query, cb) {
+    function fetchKlipyGifs(query, page, cb) {
         if (!gmRequest) { cb([]); return; }
         const key = getKlipyKey();
         if (!key) { cb([]); return; }
         const customer = encodeURIComponent(
             'beop-' + (localStorage.getItem(JOIN_USERNAME_KEY) || 'anon'));
         const url = query
-            ? `https://api.klipy.com/api/v1/${key}/gifs/search?q=${encodeURIComponent(query)}&page=1&per_page=24&customer_id=${customer}`
-            : `https://api.klipy.com/api/v1/${key}/gifs/trending?page=1&per_page=24&customer_id=${customer}`;
+            ? `https://api.klipy.com/api/v1/${key}/gifs/search?q=${encodeURIComponent(query)}&page=${page || 1}&per_page=${GIF_PAGE_SIZE}&customer_id=${customer}`
+            : `https://api.klipy.com/api/v1/${key}/gifs/trending?page=${page || 1}&per_page=${GIF_PAGE_SIZE}&customer_id=${customer}`;
         gmRequest({
             method: 'GET', url,
             headers: { 'Accept': 'application/json' },
@@ -5792,21 +5809,34 @@ ${(() => {
         item.addEventListener('click', () => { closeGifPicker(); insertGifToChat(sendUrl); });
         return item;
     }
+    function getGifCols() {
+        const grid = document.getElementById('ep-gif-grid');
+        if (!grid) return null;
+        let cols = grid.querySelector('#ep-gif-cols');
+        if (!cols) {
+            cols = document.createElement('div');
+            cols.id = 'ep-gif-cols';
+            grid.appendChild(cols);
+        }
+        return cols;
+    }
     function loadFavouritesView() {
         const grid = document.getElementById('ep-gif-grid');
         if (!grid) return;
         const favs = getGifFavourites();
+        grid.innerHTML = '';
         if (!favs.length) {
             grid.innerHTML = '<div class="ep-gif-empty">No favourites yet.<br>Star a GIF to save it here.</div>';
             return;
         }
-        grid.innerHTML = '';
-        favs.forEach(({ sendUrl, thumb, title }) => grid.appendChild(makeGifItem(thumb, sendUrl, title, true)));
+        const cols = getGifCols();
+        favs.forEach(({ sendUrl, thumb, title }) => cols.appendChild(makeGifItem(thumb, sendUrl, title, true)));
     }
 
     function createGifPicker() {
         if (document.getElementById('ep-gif-picker')) {
             gifPickerEl = document.getElementById('ep-gif-picker');
+            attachGifInfiniteScroll();
             return;
         }
         gifPickerEl = document.createElement('div');
@@ -5823,6 +5853,7 @@ ${(() => {
             <div id="ep-gif-grid"><div class="ep-gif-empty">Loading…</div></div>
         `;
         document.body.appendChild(gifPickerEl);
+        attachGifInfiniteScroll();
 
         gifPickerEl.querySelector('#ep-gif-search').addEventListener('input', e => {
             if (gifActiveTab !== 'search') return;
@@ -5853,19 +5884,54 @@ ${(() => {
         }, true);
     }
 
+    function gifPageParam() {
+        // Giphy uses an item offset, Klipy uses 1-based pages
+        return (settings.gifPickerSource || 'giphy') === 'klipy'
+            ? Math.floor(gifOffset / GIF_PAGE_SIZE) + 1
+            : gifOffset;
+    }
+
     function loadGifResults(query) {
         const grid = document.getElementById('ep-gif-grid');
         if (!grid) return;
+        gifQuery = query || '';
+        gifOffset = 0;
+        gifHasMore = true;
+        gifLoading = false;
+        try { grid.scrollTop = 0; } catch (_) {}
         grid.innerHTML = '<div class="ep-gif-empty">Loading…</div>';
+        loadGifPage();
+    }
+
+    function loadGifPage() {
+        const grid = document.getElementById('ep-gif-grid');
+        if (!grid || gifLoading || !gifHasMore || gifActiveTab !== 'search') return;
+        gifLoading = true;
+
+        grid.querySelector('.ep-gif-loading')?.remove();
+        const loader = document.createElement('div');
+        loader.className = 'ep-gif-loading';
+        loader.textContent = gifOffset === 0 ? '' : 'Loading more…';
+        if (gifOffset > 0) grid.appendChild(loader);
 
         const src = (settings.gifPickerSource || 'giphy');
+        const query = gifQuery;
+        const page = gifPageParam();
 
         function renderGifs(gifs, noKeyMsg) {
+            gifLoading = false;
+            loader.remove();
+            if (gifOffset === 0) grid.innerHTML = '';
+            else grid.querySelector(':scope > .ep-gif-empty')?.remove();
             if (!gifs.length) {
-                grid.innerHTML = `<div class="ep-gif-empty">${noKeyMsg || (query ? 'No results.' : 'Could not load GIFs.')}</div>`;
+                gifHasMore = false;
+                if (gifOffset === 0) {
+                    grid.innerHTML = `<div class="ep-gif-empty">${noKeyMsg || (query ? 'No results.' : 'Could not load GIFs.')}</div>`;
+                }
                 return;
             }
-            grid.innerHTML = '';
+            const cols = getGifCols();
+            let added = 0;
             gifs.forEach(gif => {
                 let thumb, sendUrl, title;
                 if (src === 'klipy') {
@@ -5879,15 +5945,30 @@ ${(() => {
                     title = gif.title || 'GIF';
                 }
                 if (!thumb || !sendUrl) return;
-                grid.appendChild(makeGifItem(thumb, sendUrl, title, false));
+                cols.appendChild(makeGifItem(thumb, sendUrl, title, false));
+                added++;
             });
+            gifOffset += gifs.length;
+            gifHasMore = gifs.length >= GIF_PAGE_SIZE && added > 0;
         }
 
         if (src === 'klipy') {
-            fetchKlipyGifs(query, gifs => renderGifs(gifs, !getKlipyKey() ? 'Add your Klipy API key in Settings → Media → GIF Picker.' : null));
+            fetchKlipyGifs(query, page, gifs => renderGifs(gifs, !getKlipyKey() ? 'Add your Klipy API key in Settings → Media → GIF Picker.' : null));
         } else {
-            fetchGiphyGifs(query, gifs => renderGifs(gifs, !getGiphyKey() ? 'Add your Giphy API key in Settings → Media → GIF Picker.' : null));
+            fetchGiphyGifs(query, page, gifs => renderGifs(gifs, !getGiphyKey() ? 'Add your Giphy API key in Settings → Media → GIF Picker.' : null));
         }
+    }
+
+    function attachGifInfiniteScroll() {
+        const grid = document.getElementById('ep-gif-grid');
+        if (!grid || grid.dataset.epGifScroll === '1') return;
+        grid.dataset.epGifScroll = '1';
+        grid.addEventListener('scroll', () => {
+            if (gifActiveTab !== 'search' || gifLoading || !gifHasMore) return;
+            if (grid.scrollHeight - grid.scrollTop - grid.clientHeight < 350) {
+                loadGifPage();
+            }
+        }, { passive: true });
     }
 
     function positionGifPicker(btn) {
